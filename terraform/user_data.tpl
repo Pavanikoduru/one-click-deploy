@@ -1,9 +1,30 @@
 #!/bin/bash
+set -xe
+
+# Update and install nodejs
 yum update -y
-curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+curl -sL https://rpm.nodesource.com/setup_18.x | bash -
 yum install -y nodejs
 
-mkdir -p /opt/app
-echo 'const http=require("http");const s=http.createServer((q,r)=>{if(q.url=="/health")r.end("ok");else r.end("Hello from EC2 behind ALB");});s.listen(8080);' > /opt/app/index.js
+# Create app folder and write server.js
+mkdir -p /opt/simple-api
+cat > /opt/simple-api/server.js <<'EOF'
+const http = require('http');
+const port = process.env.PORT || 8080;
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, {'Content-Type': 'text/plain'});
+    return res.end('ok');
+  }
+  if (req.url === '/') {
+    res.writeHead(200, {'Content-Type': 'text/plain'});
+    return res.end('Hello from DevOps API (private EC2 behind ALB)\\n');
+  }
+  res.writeHead(404);
+  res.end('not found');
+});
+server.listen(port, '0.0.0.0', () => { console.log('Server listening on', port); });
+EOF
 
-nohup node /opt/app/index.js > /opt/app/app.log 2>&1 &
+# Make it run
+nohup node /opt/simple-api/server.js > /opt/simple-api/app.log 2>&1 &

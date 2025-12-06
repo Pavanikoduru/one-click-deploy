@@ -1,19 +1,8 @@
-const http = require('http');
-const port = process.env.PORT || 8080;
+const express = require("express");
+const app = express();
+const PORT = 8080;
 
-const server = http.createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, {'Content-Type': 'text/plain'});
-    return res.end('ok');
-  }
-  if (req.url === '/') {
-    res.writeHead(200, {'Content-Type': 'text/plain'});
-    return res.end('Hello from DevOps API (private EC2 behind ALB)\n');
-  }
-  res.writeHead(404);
-  res.end('not found');
-});
+app.get("/", (req, res) => res.send("Welcome to my API — Deployment Success!"));
+app.get("/health", (req, res) => res.send("ok"));
 
-server.listen(port, '0.0.0.0', () => {
-  console.log(`Server listening on ${port}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

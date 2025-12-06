@@ -1,8 +1,15 @@
-const express = require("express");
-const app = express();
-const PORT = 8080;
+const http = require("http");
+const port = 8080;
 
-app.get("/", (req, res) => res.send("Welcome to my API — Deployment Success!"));
-app.get("/health", (req, res) => res.send("ok"));
+const requestHandler = (req, res) => {
+  if (req.url === "/health") {
+    res.writeHead(200);
+    return res.end("ok");
+  }
+  res.writeHead(200);
+  res.end("Hello from Private EC2 behind ALB!");
+};
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+http.createServer(requestHandler).listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});

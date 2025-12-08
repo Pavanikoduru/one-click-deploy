@@ -5,6 +5,6 @@ curl -sL https://rpm.nodesource.com/setup_18.x | bash -
 yum install -y nodejs
 
 git clone https://github.com/Pavanikoduru/one-click-deploy.git
-cd <YOUR_REPO>/app
+cd one-click-deploy/app
 npm install express
 nohup node server.js > app.log 2>&1 &

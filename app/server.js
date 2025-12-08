@@ -10,6 +10,6 @@ const requestHandler = (req, res) => {
   res.end("Hello from Private EC2 behind ALB!");
 };
 
-http.createServer(requestHandler).listen(port, () => {
+http.createServer(requestHandler).listen(port, "0.0.0.0", () => {
   console.log(`Server running on port ${port}`);
 });

@@ -1,68 +1,45 @@
+###########################################################
+# Provider
+###########################################################
 provider "aws" {
   region = "ap-southeast-2"
 }
 
-# -----------------------------
+###########################################################
+# Get latest Amazon Linux 2 AMI
+###########################################################
+data "aws_ami" "amazon_linux_2" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+}
+
+###########################################################
 # VPC and Subnets
-# -----------------------------
-resource "aws_vpc" "vpc" {
-  cidr_block = "10.0.0.0/16"
+###########################################################
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  name    = "oneclick-vpc"
+  cidr    = "10.0.0.0/16"
+
+  azs              = ["ap-southeast-2a", "ap-southeast-2b"]
+  public_subnets   = ["10.0.1.0/24", "10.0.2.0/24"]
+  private_subnets  = ["10.0.3.0/24", "10.0.4.0/24"]
+
+  enable_nat_gateway = true
 }
 
-resource "aws_subnet" "public" {
-  count                   = 2
-  vpc_id                  = aws_vpc.vpc.id
-  availability_zone       = ["ap-southeast-2a", "ap-southeast-2b"][count.index]
-  cidr_block              = cidrsubnet(aws_vpc.vpc.cidr_block, 4, count.index)
-  map_public_ip_on_launch = true
-}
-
-resource "aws_subnet" "private" {
-  count      = 2
-  vpc_id     = aws_vpc.vpc.id
-  cidr_block = cidrsubnet(aws_vpc.vpc.cidr_block, 4, count.index + 2)
-}
-
-# -----------------------------
-# Internet Gateway and NAT
-# -----------------------------
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.vpc.id
-}
-
-resource "aws_eip" "nat" {
-  # Remove "vpc = true" to avoid Terraform error
-}
-
-resource "aws_nat_gateway" "nat" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id
-}
-
-# -----------------------------
-# Route Tables
-# -----------------------------
-resource "aws_route_table" "public_rt" {
-  vpc_id = aws_vpc.vpc.id
-}
-
-resource "aws_route" "public_internet" {
-  route_table_id         = aws_route_table.public_rt.id
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.igw.id
-}
-
-resource "aws_route_table_association" "public_assoc" {
-  count          = 2
-  subnet_id      = aws_subnet.public[count.index].id
-  route_table_id = aws_route_table.public_rt.id
-}
-
-# -----------------------------
+###########################################################
 # Security Groups
-# -----------------------------
+###########################################################
+# ALB Security Group
 resource "aws_security_group" "alb_sg" {
-  vpc_id = aws_vpc.vpc.id
+  name   = "alb_sg"
+  vpc_id = module.vpc.vpc_id
 
   ingress {
     from_port   = 80
@@ -79,8 +56,10 @@ resource "aws_security_group" "alb_sg" {
   }
 }
 
+# EC2 Security Group
 resource "aws_security_group" "ec2_sg" {
-  vpc_id = aws_vpc.vpc.id
+  name   = "ec2_sg"
+  vpc_id = module.vpc.vpc_id
 
   ingress {
     from_port       = 8080
@@ -97,51 +76,32 @@ resource "aws_security_group" "ec2_sg" {
   }
 }
 
-# -----------------------------
-# Launch Template
-# -----------------------------
-resource "aws_launch_template" "lt" {
-  name_prefix   = "asg-lt-"
-  image_id      = "ami-0b69ea66ff7391e80" # Amazon Linux 2 Free Tier
-  instance_type = "t2.micro"              # Free Tier eligible
-
-  user_data = base64encode(<<EOF
-#!/bin/bash
-curl -sL https://rpm.nodesource.com/setup_18.x | bash -
-yum install -y nodejs git
-git clone https://github.com/Pavanikoduru/one-click-deploy.git
-cd one-click-deploy/app
-npm install
-nohup node server.js > app.log 2>&1 &
-EOF
-  )
-
-  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
-}
-
-# -----------------------------
-# Application Load Balancer
-# -----------------------------
-resource "aws_lb" "alb" {
-  name               = "api-alb"
+###########################################################
+# Load Balancer
+###########################################################
+resource "aws_lb" "app_alb" {
+  name               = "app-alb"
   load_balancer_type = "application"
-  subnets            = [for s in aws_subnet.public : s.id]
   security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = module.vpc.public_subnets
 }
 
+# Target Group
 resource "aws_lb_target_group" "tg" {
-  name     = "api-tg"
+  name     = "app-tg"
   port     = 8080
   protocol = "HTTP"
-  vpc_id   = aws_vpc.vpc.id
+  vpc_id   = module.vpc.vpc_id
 
   health_check {
     path = "/health"
+    port = "8080"
   }
 }
 
-resource "aws_lb_listener" "listener" {
-  load_balancer_arn = aws_lb.alb.arn
+# ALB Listener
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.app_alb.arn
   port              = 80
   protocol          = "HTTP"
 
@@ -151,34 +111,43 @@ resource "aws_lb_listener" "listener" {
   }
 }
 
-# -----------------------------
+###########################################################
+# User Data for EC2
+###########################################################
+locals {
+  userdata = templatefile("${path.module}/../app/userdata.sh", {})
+}
+
+###########################################################
+# Launch Template
+###########################################################
+resource "aws_launch_template" "lt" {
+  name_prefix   = "oneclick-lt"
+  image_id      = data.aws_ami.amazon_linux_2.id
+  instance_type = "t3.micro"
+  user_data     = base64encode(local.userdata)
+  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
+}
+
+###########################################################
 # Auto Scaling Group
-# -----------------------------
+###########################################################
 resource "aws_autoscaling_group" "asg" {
-  desired_capacity    = 2
-  max_size            = 3
-  min_size            = 2
-  vpc_zone_identifier = [for s in aws_subnet.private : s.id]
+  desired_capacity     = 2
+  max_size             = 2
+  min_size             = 2
+  vpc_zone_identifier  = module.vpc.private_subnets
+  target_group_arns    = [aws_lb_target_group.tg.arn]
 
   launch_template {
     id      = aws_launch_template.lt.id
     version = "$Latest"
   }
 
-  target_group_arns          = [aws_lb_target_group.tg.arn]
-  health_check_type          = "ELB"
-  health_check_grace_period  = 60
-
   tag {
     key                 = "Name"
-    value               = "ASG-Instance"
+    value               = "oneclick-ec2"
     propagate_at_launch = true
   }
 }
 
-# -----------------------------
-# Output ALB DNS
-# -----------------------------
-output "alb_dns" {
-  value = aws_lb.alb.dns_name
-}
